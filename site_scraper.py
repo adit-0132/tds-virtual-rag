@@ -1,167 +1,72 @@
-from selenium import webdriver
-from selenium.webdriver.common.by import By
-from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from bs4 import BeautifulSoup
+import os
 import json
-import time
+import re
+from datetime import datetime
+from urllib.parse import urljoin
+from markdownify import markdownify as md
+from playwright.sync_api import sync_playwright
 
-class TDSScraper:
-    def __init__(self):
-        # Set up Chrome options
-        chrome_options = Options()
-        chrome_options.add_argument("--headless")  # Run in background
-        chrome_options.add_argument("--no-sandbox")
-        chrome_options.add_argument("--disable-dev-shm-usage")
-        
-        # Initialize the driver
-        self.driver = webdriver.Chrome(options=chrome_options)
-        self.wait = WebDriverWait(self.driver, 10)
-        
-    def scrape_course_content(self, base_url="https://tds.s-anand.net/#/2025-01/"):
-        try:
-            print(f"Loading {base_url}")
-            self.driver.get(base_url)
-            
-            # Wait for content to load
-            time.sleep(3)
-            
-            # Get the page source after JavaScript execution
-            page_source = self.driver.page_source
-            soup = BeautifulSoup(page_source, 'html.parser')
-            
-            # Extract main content
-            content_data = {
-                "course_title": "",
-                "sections": [],
-                "links": []
-            }
-            
-            # Try to find the main content area
-            # This will depend on the actual HTML structure
-            main_content = soup.find('main') or soup.find('div', class_='content') or soup.find('body')
-            
-            if main_content:
-                # Extract title
-                title = main_content.find('h1') or main_content.find('title')
-                if title:
-                    content_data["course_title"] = title.get_text().strip()
-                
-                # Extract all headings and their content
-                headings = main_content.find_all(['h1', 'h2', 'h3', 'h4'])
-                
-                for heading in headings:
-                    section = {
-                        "heading": heading.get_text().strip(),
-                        "level": heading.name,
-                        "content": []
-                    }
-                    
-                    # Get content after this heading until next heading
-                    current = heading.next_sibling
-                    while current and current.name not in ['h1', 'h2', 'h3', 'h4']:
-                        if hasattr(current, 'get_text'):
-                            text = current.get_text().strip()
-                            if text:
-                                section["content"].append(text)
-                        current = current.next_sibling
-                    
-                    content_data["sections"].append(section)
-                
-                # Extract all links for potential navigation
-                links = main_content.find_all('a', href=True)
-                for link in links:
-                    if link['href'].startswith('#') or 'tds.s-anand.net' in link['href']:
-                        content_data["links"].append({
-                            "text": link.get_text().strip(),
-                            "href": link['href']
-                        })
-            
-            return content_data
-            
-        except Exception as e:
-            print(f"Error scraping: {e}")
-            return None
-    
-    def explore_navigation(self):
-        """Try to find all course sections/pages"""
-        try:
-            # Look for navigation elements
-            nav_elements = self.driver.find_elements(By.TAG_NAME, "nav")
-            nav_elements += self.driver.find_elements(By.CLASS_NAME, "nav")
-            nav_elements += self.driver.find_elements(By.CLASS_NAME, "menu")
-            
-            sections = []
-            for nav in nav_elements:
-                links = nav.find_elements(By.TAG_NAME, "a")
-                for link in links:
-                    href = link.get_attribute("href")
-                    text = link.text.strip()
-                    if href and text:
-                        sections.append({"text": text, "href": href})
-            
-            return sections
-            
-        except Exception as e:
-            print(f"Error exploring navigation: {e}")
-            return []
-    
-    def scrape_all_sections(self):
-        """Scrape the main page and try to find other sections"""
-        all_content = []
-        
-        # Scrape main page
-        main_content = self.scrape_course_content()
-        if main_content:
-            all_content.append(main_content)
-        
-        # Try to find and scrape other sections
-        sections = self.explore_navigation()
-        
-        for section in sections:
-            if section["href"].startswith("#"):
-                # Internal navigation
-                try:
-                    print(f"Navigating to {section['href']}")
-                    self.driver.get(f"https://tds.s-anand.net/{section['href']}")
-                    time.sleep(2)
-                    
-                    section_content = self.scrape_course_content()
-                    if section_content:
-                        section_content["section_name"] = section["text"]
-                        all_content.append(section_content)
-                        
-                except Exception as e:
-                    print(f"Error scraping section {section['href']}: {e}")
-        
-        return all_content
-    
-    def save_to_json(self, data, filename="tds_course_content.json"):
-        """Save scraped data to JSON file"""
-        with open(filename, 'w', encoding='utf-8') as f:
-            json.dump(data, f, indent=2, ensure_ascii=False)
-        print(f"Content saved to {filename}")
-    
-    def close(self):
-        """Close the browser"""
-        self.driver.quit()
+BASE_URL = "https://tds.s-anand.net/#/"
+BASE_ORIGIN = "https://tds.s-anand.net"
 
-# Usage example
-if __name__ == "__main__":
-    scraper = TDSScraper()
-    
+OUTPUT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "json_output"))
+os.makedirs(OUTPUT_DIR, exist_ok=True)
+OUTPUT_FILE = os.path.join(OUTPUT_DIR, "tds_course_content.json")
+
+visited = set()
+all_data = []
+
+def sanitize_filename(title):
+    return re.sub(r'[\/*?:"<>|]', "_", title).strip().replace(" ", "_")
+
+def extract_all_internal_links(page):
+    links = page.eval_on_selector_all("a[href]", "els => els.map(el => el.href)")
+    return list(set(
+        link for link in links
+        if BASE_ORIGIN in link and '/#/' in link
+    ))
+
+def wait_for_article_and_get_html(page):
+    page.wait_for_selector("article.markdown-section#main", timeout=10000)
+    return page.inner_html("article.markdown-section#main")
+
+def crawl_page(page, url):
+    if url in visited:
+        return
+    visited.add(url)
+    print(f"📄 Visiting: {url}")
     try:
-        # Scrape all content
-        content = scraper.scrape_all_sections()
-        
-        # Save to file
-        scraper.save_to_json(content)
-        
-        print(f"Scraped {len(content)} sections")
-        for section in content:
-            print(f"- {section.get('course_title', 'Unknown')} ({len(section.get('sections', []))} subsections)")
-            
-    finally:
-        scraper.close()
+        page.goto(url, wait_until="domcontentloaded")
+        page.wait_for_timeout(1000)
+        html = wait_for_article_and_get_html(page)
+    except Exception as e:
+        print(f"❌ Error loading page: {url} — {e}")
+        return
+    title = page.title().split(" - ")[0].strip() or f"page_{len(visited)}"
+    markdown = md(html)
+    all_data.append({
+        "title": title,
+        "original_url": url,
+        "downloaded_at": datetime.now().isoformat(),
+        "content_markdown": markdown
+    })
+    links = extract_all_internal_links(page)
+    for link in links:
+        if link not in visited:
+            crawl_page(page, link)
+
+def main():
+    global visited, all_data
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        context = browser.new_context()
+        page = context.new_page()
+        crawl_page(page, BASE_URL)
+        with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
+            json.dump(all_data, f, indent=2)
+        print(f"✅ Completed. {len(all_data)} pages saved to {OUTPUT_FILE}.")
+        browser.close()
+
+if __name__ == "__main__":
+    main()
+
