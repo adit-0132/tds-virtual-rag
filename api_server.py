@@ -87,7 +87,7 @@ class QueryRequest(BaseModel):
     image: Optional[str] = None  # base64 string
 
 '''def get_llm_answer(prompt):
-    api_key = os.getenv("OPENROUTER_API_KEY") or "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"
+    api_key = os.getenv("OPENROUTER_API_KEY") or "paste_your_api_key_here"
     if not api_key:
         raise RuntimeError("OPENROUTER_API_KEY environment variable not set.")
     headers = {
