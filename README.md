@@ -7,7 +7,7 @@
 
 ## Overview
 
-This project delivers a production-grade RAG (Retrieval-Augmented Generation) system for the IIT Madras "Tools for Data Science" (TDS) course, enabling users to ask questions and receive answers grounded in official course materials and forum discussions.  
+This project delivers a production-grade RAG (Retrieval-Augmented Generation) system for the IIT Madras "Tools for Data Science" (TDS) course, enabling users to ask questions and receive answers grounded in official course materials and discourse forum discussions.  
 It supports **text and image queries** (using OpenAI's CLIP for multimodal embeddings), leverages **Playwright for dynamic web scraping** of course and forum content, and ensures high availability by **automatically falling back from OpenRouter to AI Pipe** if one LLM provider is unavailable.
 
 ---
@@ -43,7 +43,7 @@ It supports **text and image queries** (using OpenAI's CLIP for multimodal embed
 ## How It Works
 
 1. **Data Ingestion & Chunking:**  
-   Course materials and forum posts are ingested and chunked for optimal retrieval.
+   Course materials from the site and Discourse forum posts are ingested and chunked for optimal retrieval.
 2. **Multimodal Embedding:**  
    Text and images are encoded for semantic search.
 3. **Vector Indexing:**  
